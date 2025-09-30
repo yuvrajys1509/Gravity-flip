@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gravity Flip</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tone.js for dynamic music and sound effects -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script> 
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Audiowide&display=swap');
+        
+        body {
+            background-color: #0d0d10;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            font-family: 'Audiowide', cursive;
+            color: #ffffff;
+        }
+
+        #game-container {
+            width: 95%;
+            max-width: 800px;
+            box-shadow: 0 0 40px rgba(0, 255, 255, 0.5);
+            border: 4px solid #00ffff;
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            background-color: #1a1a2e; /* Dark background for game area */
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            background-color: #111118;
+        }
+
+        #ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.85); /* Slightly darker overlay */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            z-index: 10;
+        }
+
+        .neon-text {
+            color: #00ffff;
+            text-shadow: 0 0 7px #00ffff, 0 0 10px #00ffff, 0 0 21px #00ffff, 0 0 42px #00ffff, 0 0 82px #00ffff, 0 0 92px #00ffff, 0 0 102px #00ffff, 0 0 151px #00ffff;
+            margin-bottom: 20px;
+        }
+
+        .neon-button {
+            /* This style is primarily a base; the specific button in showOverlay overrides it */
+            background-color: #00ffff;
+            color: #111118;
+            padding: 12px 30px; 
+            border-radius: 8px;
+            font-size: 1.5rem; 
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 0 5px #00ffff, 0 0 15px #00ffff, 0 0 30px #00ffff;
+            transition: all 0.2s ease;
+        }
+
+        .neon-button:hover {
+            background-color: #ff00ff;
+            box-shadow: 0 0 10px #ff00ff, 0 0 20px #ff00ff, 0 0 40px #ff00ff;
+        }
+        
+        /* New style for control icons */
+        .control-icon {
+            padding: 10px;
+            border-radius: 50%;
+            background-color: rgba(255, 255, 255, 0.1);
+            transition: background-color 0.2s;
+        }
+
+        .control-icon:hover {
+            background-color: rgba(255, 255, 255, 0.3);
+        }
+
+        .control-icon svg {
+            stroke-width: 2.5;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="score-board" class="p-3 flex justify-between items-center bg-gray-900 border-b-2 border-cyan-500">
+        <h1 class="text-xl text-cyan-400">G:FLIP</h1>
+        <div id="score" class="text-2xl font-bold text-yellow-400">SCORE: 0</div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    // Constants and Initialization
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreDisplay = document.getElementById('score');
+    const container = document.getElementById('game-container');
+
+    // Define the colors to cycle through: Cyan (Blue), Red, Yellow
+    const PLAYER_COLORS = ['#00ffff', '#ff0000', '#ffff00'];
+
+    // Game variables
+    let gameLoop;
+    let isRunning = false;
+    let score = 0;
+    let lastTime = 0;
+    const GAME_WIDTH = 800;
+    const GAME_HEIGHT = 400;
+    let SCALE = 1; 
+
+    // Player properties
+    const PLAYER_SIZE = 20;
+    const GRAVITY_ACCEL = 0.5;
+    const JUMP_VELOCITY = 10;
+    const RUN_SPEED = 4;
+    
+    let player = {
+        x: 50,
+        y: GAME_HEIGHT - PLAYER_SIZE, // Start on the bottom floor
+        vy: 0,
+        vx: RUN_SPEED,
+        gravityDirection: 1, // 1 for down (normal), -1 for up (flipped)
+        colorIndex: 0, // New property to track current color
+        color: PLAYER_COLORS[0] // Start with the first color (Cyan/Blue)
+    };
+
+    // Obstacle properties
+    const OBSTACLE_GAP = 250;
+    const OBSTACLE_WIDTH = 40;
+    const SPIKE_BLOCK_HEIGHT = 100; // The height of the spike section itself
+    let obstacles = [];
+    let obstacleCounter = 0;
+    
+    // --- Audio Setup (Tone.js) ---
+    let isMusicOn = true; // State to track music on/off
+
+    // Background Music (Simple pulsing synth)
+    const musicSynth = new Tone.Synth({
+        oscillator: { type: "sawtooth" }, // Changed to sawtooth for a richer sound
+        envelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 0.2 }
+    }).toDestination();
+
+    // Flip Sound (Quick, high-pitched tone change)
+    const flipSynth = new Tone.MembraneSynth({
+        pitchDecay: 0.05,
+        octaves: 2,
+        volume: -10
+    }).toDestination();
+
+    // Collision Sound (Noise burst)
+    const crashNoise = new Tone.NoiseSynth({
+        noise: { type: "white" },
+        envelope: { attack: 0.005, decay: 0.3, sustain: 0, release: 0.5 }
+    }).toDestination();
+    
+    let musicLoop;
+    
+    /**
+     * Sets up the looping background music track.
+     */
+    function createMusicLoop() {
+        if (musicLoop) musicLoop.dispose();
+        
+        // Simple, repeating two-note pattern (C3 and G2) for a driving feel
+        musicLoop = new Tone.Loop(time => {
+            musicSynth.triggerAttackRelease("C3", "4n", time);
+            musicSynth.triggerAttackRelease("G2", "4n", time + Tone.Time("4n").toSeconds());
+        }, "2n").start(0);
+
+        Tone.Transport.bpm.value = 140;
+    }
+
+    /** Toggles the background music on or off. */
+    function toggleMusic() {
+        isMusicOn = !isMusicOn;
+        if (isMusicOn) {
+            Tone.Transport.start();
+            if (musicLoop) musicLoop.start(0);
+        } else {
+            Tone.Transport.pause();
+        }
+    }
+    
+    // --- Sound Functions ---
+    /** Plays the sound when gravity is flipped. */
+    function playFlipSound() {
+        flipSynth.triggerAttackRelease("C5", "16n");
+    }
+
+    /** Plays the sound when collision occurs (game over). */
+    function playCollisionSound() {
+        // Play a harsh noise for the crash
+        crashNoise.triggerAttackRelease("8n");
+    }
+
+    /** Updates the Music icon to reflect the current state (Muted or Playing). */
+    function updateMusicIcon(iconElement) {
+        // Simple SVG path for Speaker and Speaker with a slash (Mute)
+        const speakerOnPath = `<path d="M11 5L6 9H2V15H6L11 19V5Z"/><path d="M15.5 8.5C17.833 9.833 17.833 14.167 15.5 15.5"/><path d="M19 6C22 9 22 15 19 18"/>`;
+        const speakerOffPath = `<path d="M11 5L6 9H2V15H6L11 19V5Z"/><line x1="15" y1="9" x2="20" y2="15"/><line x1="15" y1="15" x2="20" y2="9"/>`; // Custom slash mute
+
+        iconElement.innerHTML = isMusicOn ? speakerOnPath : speakerOffPath;
+    }
+
+    // --- Utility Functions ---
+
+    /**
+     * Creates and displays the start or game over screen overlay.
+     * @param {string} title - The main title text.
+     * @param {string} messageHtml - The instructions/score message (now accepts HTML).
+     * @param {string} buttonText - Text for the restart button.
+     * @param {Function} buttonAction - Function to run on button click.
+     */
+    function showOverlay(title, messageHtml, buttonText, buttonAction) {
+        let overlay = document.getElementById('ui-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'ui-overlay';
+            container.appendChild(overlay);
+        }
+
+        // Overlay structure is now updated to visually connect the instructions and the button
+        overlay.innerHTML = `
+            <h1 class="text-5xl md:text-6xl neon-text mb-6">${title}</h1>
+            <div id="overlay-content" class="text-xl md:text-2xl text-white p-0 w-full flex flex-col items-center">
+                <!-- Message HTML containing instructions/score -->
+                ${messageHtml} 
+                
+                <!-- Button placed visually below the message content -->
+                <button id="overlay-button" 
+                        class="neon-button w-[90%] max-w-[40rem] mx-2 !p-4 
+                               rounded-b-xl rounded-t-none text-2xl 
+                               mt-0 shadow-2xl hover:shadow-cyan-400">
+                    ${buttonText}
+                </button>
+                
+                <!-- NEW: Control row for Game Over/Home Screen -->
+                ${title === 'GAME OVER' ? `
+                    <div class="mt-8 flex space-x-8">
+                        <!-- Music Toggle Icon -->
+                        <button id="music-toggle" class="control-icon text-cyan-400 hover:text-cyan-200">
+                            <svg class="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                                <!-- Icon path set dynamically later -->
+                            </svg>
+                        </button>
+                        <!-- Home/Quit Icon -->
+                        <button id="home-quit" class="control-icon text-pink-400 hover:text-pink-200">
+                            <svg class="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 9 L12 2 L21 9 M6 12 V21 H18 V12 M9 15 V18 H15 V15 H9Z"/>
+                            </svg>
+                        </button>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+        overlay.style.display = 'flex';
+        
+        // Main button listener
+        document.getElementById('overlay-button').onclick = () => {
+            overlay.style.display = 'none';
+            buttonAction();
+        };
+
+        // If it's the game over screen, add listeners for the new controls
+        if (title === 'GAME OVER') {
+            const musicButton = document.getElementById('music-toggle');
+            const homeButton = document.getElementById('home-quit');
+
+            // Initialize music icon state
+            updateMusicIcon(musicButton.querySelector('svg'));
+
+            musicButton.onclick = () => {
+                toggleMusic();
+                updateMusicIcon(musicButton.querySelector('svg'));
+            };
+            
+            homeButton.onclick = () => {
+                Tone.Transport.stop(); // Stop all sound
+                if (musicLoop) musicLoop.stop();
+                showStartScreen(); // Go back to the initial instructions
+            };
+        }
+    }
+
+    /**
+     * Resizes the canvas to maintain aspect ratio and fit the container.
+     */
+    function resizeCanvas() {
+        // Calculate new height based on container width and fixed aspect ratio (GAME_WIDTH / GAME_HEIGHT)
+        canvas.width = container.clientWidth;
+        // Set height to maintain 800:400 ratio
+        canvas.height = canvas.width * (GAME_HEIGHT / GAME_WIDTH); 
+        
+        // Update the scale factor for drawing
+        SCALE = canvas.width / GAME_WIDTH;
+    }
+
+    // --- Game Logic Functions ---
+
+    /**
+     * Core logic for flipping gravity and cycling the player color.
+     */
+    function applyGravityFlip() {
+        if (!isRunning) return;
+
+        playFlipSound(); // Play flip sound effect
+
+        // 1. Flip the gravity direction
+        player.gravityDirection *= -1;
+
+        // 2. Cycle through the player colors (Blue, Red, Yellow)
+        player.colorIndex = (player.colorIndex + 1) % PLAYER_COLORS.length;
+        player.color = PLAYER_COLORS[player.colorIndex];
+
+        // 3. Apply an immediate upward/downward impulse (like a small jump)
+        player.vy = -JUMP_VELOCITY * player.gravityDirection * 0.5;
+    }
+
+    /**
+     * Handles screen input (click/tap) and prevents default browser actions 
+     * like scrolling, which often cause "glitches" on mobile.
+     */
+    function handleScreenInput(event) {
+        if (event) {
+            event.preventDefault(); // FIX for mobile glitch: Prevents scrolling/zooming on touch/click
+        }
+        applyGravityFlip();
+    }
+
+
+    /**
+     * Creates a new, random obstacle set (a spike block on either the top or bottom).
+     */
+    function createObstacle() {
+        const x = GAME_WIDTH;
+        const width = OBSTACLE_WIDTH;
+        // Randomize the height of the spike section to create varied difficulty
+        const height = Math.floor(Math.random() * 50) + 100; // Height between 100 and 150
+        const isTopSpike = Math.random() < 0.5;
+        
+        let obsY;
+        let obsType;
+
+        if (isTopSpike) {
+            // Obstacle on the ceiling
+            obsY = 0;
+            obsType = 'topSpike';
+        } else {
+            // Obstacle on the floor
+            obsY = GAME_HEIGHT - height;
+            obsType = 'bottomSpike';
+        }
+
+        obstacles.push({
+            x,
+            y: obsY,
+            width,
+            height,
+            type: obsType,
+            color: '#ff0000',
+            isScored: false
+        });
+    }
+
+    /**
+     * Updates the game state (physics, movement, scoring, spawning).
+     * @param {number} deltaTime - Time elapsed since the last update in milliseconds.
+     */
+    function update(deltaTime) {
+        if (!isRunning) return;
+
+        // --- Player Physics ---
+
+        // Apply gravity
+        player.vy += GRAVITY_ACCEL * player.gravityDirection * (deltaTime / 16.67);
+        // Limit max velocity
+        player.vy = Math.min(Math.max(player.vy, -20), 20);
+
+        // Update position
+        player.y += player.vy * (deltaTime / 16.67);
+
+        // Keep player X constant relative to the camera/scroll
+        player.x = 50; 
+
+        // Boundary checks (Floor and Ceiling)
+        const floorY = GAME_HEIGHT - PLAYER_SIZE;
+        const ceilingY = 0;
+
+        // If player hits the floor (normal gravity)
+        if (player.gravityDirection === 1 && player.y >= floorY) {
+            player.y = floorY;
+            player.vy = 0;
+        } 
+        // If player hits the ceiling (flipped gravity)
+        else if (player.gravityDirection === -1 && player.y <= ceilingY) {
+            player.y = ceilingY;
+            player.vy = 0;
+        }
+
+        // --- Obstacle Logic ---
+
+        // Move obstacles
+        obstacles.forEach(obs => {
+            obs.x -= RUN_SPEED * (deltaTime / 16.67);
+
+            // Scoring: Check if player has passed the obstacle
+            if (!obs.isScored && obs.x + obs.width < player.x) {
+                score++;
+                obs.isScored = true;
+                scoreDisplay.textContent = `SCORE: ${score}`;
+            }
+        });
+
+        // Remove off-screen obstacles
+        obstacles = obstacles.filter(obs => obs.x + OBSTACLE_WIDTH > 0);
+
+        // Obstacle spawning
+        if (obstacles.length === 0 || obstacles[obstacles.length - 1].x < GAME_WIDTH - OBSTACLE_GAP) {
+            createObstacle();
+        }
+
+        // --- Collision Detection ---
+        if (checkCollision()) {
+            gameOver();
+        }
+    }
+
+    /**
+     * Checks if the player is colliding with any obstacle.
+     * @returns {boolean} True if collision detected, otherwise false.
+     */
+    function checkCollision() {
+        const playerRect = {
+            left: player.x,
+            right: player.x + PLAYER_SIZE,
+            top: player.y,
+            bottom: player.y + PLAYER_SIZE
+        };
+
+        for (const obs of obstacles) {
+            const obsRect = {
+                left: obs.x,
+                right: obs.x + obs.width,
+                top: obs.y,
+                bottom: obs.y + obs.height
+            };
+
+            // Axis-Aligned Bounding Box (AABB) collision check
+            if (playerRect.right > obsRect.left &&
+                playerRect.left < obsRect.right &&
+                playerRect.bottom > obsRect.top &&
+                playerRect.top < obsRect.bottom) {
+                
+                // Collision with a spike/trap detected!
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Draws a series of triangles to represent spikes on a block.
+     * @param {number} x - Start X position.
+     * @param {number} y - Base Y position.
+     * @param {number} width - Total width of the spike block.
+     * @param {number} height - Total height of the spike block.
+     * @param {boolean} isTop - True if spikes point down from the top edge.
+     */
+    function drawSpikes(x, y, width, height, isTop) {
+        const numSpikes = Math.floor(width / 10); // 10px wide spikes
+        const spikeHeight = 15; // fixed height for visual spikes
+
+        // Draw the main red hazard block
+        ctx.fillStyle = '#ff0000';
+        ctx.fillRect(x, y, width, height);
+
+        // Draw the triangular spike points
+        ctx.fillStyle = '#cc0000'; // Darker red for points
+        ctx.shadowBlur = 0;
+
+        for (let i = 0; i < numSpikes; i++) {
+            const startX = x + i * 10;
+            const midX = startX + 5;
+            const endX = startX + 10;
+
+            let tipY;
+            let baseY;
+
+            if (isTop) {
+                // Spikes pointing down (base on the bottom of the block, tip towards the player)
+                baseY = y + height;
+                tipY = y + height - spikeHeight;
+            } else {
+                // Spikes pointing up (base on the top of the block, tip towards the player)
+                baseY = y;
+                tipY = y + spikeHeight;
+            }
+
+            ctx.beginPath();
+            ctx.moveTo(startX, baseY);
+            ctx.lineTo(midX, tipY); // The tip of the spike
+            ctx.lineTo(endX, baseY);
+            ctx.closePath();
+            ctx.fill();
+        }
+    }
+
+
+    /**
+     * Draws the current game state to the canvas.
+     */
+    function draw() {
+        // Clear canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Scale the drawing context
+        ctx.save();
+        ctx.scale(SCALE, SCALE);
+
+        // --- Draw Ground/Ceiling Boundary ---
+        ctx.fillStyle = '#0a3d62';
+        // Bottom Boundary
+        ctx.fillRect(0, GAME_HEIGHT - 5, GAME_WIDTH, 5); 
+        // Top Boundary
+        ctx.fillRect(0, 0, GAME_WIDTH, 5);
+
+        // --- Draw Player ---
+        ctx.fillStyle = player.color;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = player.color;
+        ctx.fillRect(player.x, player.y, PLAYER_SIZE, PLAYER_SIZE);
+        ctx.shadowBlur = 0; // Reset shadow
+
+        // --- Draw Obstacles (Spikes) ---
+        obstacles.forEach(obs => {
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = obs.color;
+            
+            // Draw the spike base block and points
+            drawSpikes(obs.x, obs.y, obs.width, obs.height, obs.type === 'topSpike');
+
+            ctx.shadowBlur = 0; // Reset shadow
+        });
+
+        ctx.restore(); // Restore context to no scaling
+    }
+
+    /**
+     * The main game animation loop.
+     * @param {number} currentTime - High-resolution timestamp from requestAnimationFrame.
+     */
+    function gameLoopFn(currentTime) {
+        if (!isRunning) return;
+
+        // Calculate delta time for frame-independent movement
+        const deltaTime = currentTime - lastTime;
+        lastTime = currentTime;
+
+        update(deltaTime);
+        draw();
+
+        gameLoop = requestAnimationFrame(gameLoopFn);
+    }
+
+    /**
+     * Resets all game variables and starts the game loop.
+     */
+    async function startGame() { // <-- Changed to async function for Tone.start()
+        // --- Audio Start ---
+        // Tone.js needs a user gesture to start. We use await Tone.start() for maximum compatibility.
+        try {
+            if (Tone.context.state !== 'running') {
+                await Tone.start(); // This ensures the audio context is fully running
+            }
+        } catch (e) {
+            console.error("Failed to start audio context:", e);
+        }
+        
+        // Reset state
+        score = 0;
+        scoreDisplay.textContent = `SCORE: 0`;
+        obstacles = [];
+        player = {
+            x: 50,
+            y: GAME_HEIGHT - PLAYER_SIZE, 
+            vy: 0,
+            vx: RUN_SPEED,
+            gravityDirection: 1,
+            colorIndex: 0, // Reset color index
+            color: PLAYER_COLORS[0] // Set initial color
+        };
+
+        isRunning = true;
+        lastTime = performance.now(); // Initialize lastTime
+        gameLoop = requestAnimationFrame(gameLoopFn);
+        
+        // Setup Input Listeners (FIX: Added touchstart for mobile)
+        document.addEventListener('keydown', handleKeyDown);
+        canvas.addEventListener('click', handleScreenInput);
+        canvas.addEventListener('touchstart', handleScreenInput, { passive: false });
+        
+        // Start music now that Tone.context is running and if the toggle is on
+        createMusicLoop();
+        if (isMusicOn) {
+            Tone.Transport.start();
+        }
+    }
+
+    /**
+     * Stops the game loop and displays the game over screen.
+     */
+    function gameOver() {
+        isRunning = false;
+        cancelAnimationFrame(gameLoop);
+        
+        // Remove Input Listeners (FIX: Removed touchstart for mobile)
+        document.removeEventListener('keydown', handleKeyDown);
+        canvas.removeEventListener('click', handleScreenInput);
+        canvas.removeEventListener('touchstart', handleScreenInput);
+        
+        // --- Audio Stop/Effect ---
+        Tone.Transport.pause(); // Pause transport to stop music gracefully
+        playCollisionSound(); // Play the crash sound
+        
+        const finalScore = score;
+        // Game Over message content. Increased sizes for prominence.
+        showOverlay(
+            'GAME OVER', 
+            `<div class="text-center w-[90%] max-w-[40rem] mx-auto p-4">
+                <p class="text-4xl md:text-5xl text-yellow-400 mb-4 font-bold">Score: ${finalScore}</p>
+                <p class="text-2xl text-white">You'll need quicker reflexes next time.</p>
+             </div>`, 
+            'RETRY (SPACE)', 
+            startGame
+        );
+    }
+
+    /** Displays the initial start screen with instructions. */
+    function showStartScreen() {
+        showOverlay(
+            'GRAVITY FLIP: THE CHALLENGE', 
+            `
+            <p class="text-3xl mb-6 text-yellow-300 text-center">Master the flip and escape the hazards!</p>
+            <!-- Instruction box is now wider, text is larger, and only top corners are rounded -->
+            <div id="intro-instructions" class="text-left p-8 bg-gray-800/70 
+                                                rounded-t-xl w-[90%] max-w-[40rem] mx-auto 
+                                                shadow-2xl border border-b-0 border-cyan-500/50">
+                <h3 class="text-cyan-400 font-bold text-2xl mb-4">How to Play</h3>
+                <p class="mb-4 text-xl">
+                    <span class="font-bold text-white">Objective:</span> Survive the scrolling red spikes and score points.
+                </p>
+                <p class="mb-2">
+                    <span class="font-bold text-white text-xl">Controls:</span>
+                </p>
+                <div class="mb-4 ml-6 text-xl">
+                    - Press <span class="font-mono bg-gray-700 px-3 py-1 rounded text-pink-400 shadow-lg">SPACEBAR</span> 
+                </div>
+                <div class="mb-2 ml-6 text-xl">
+                    - Or <span class="font-mono bg-gray-700 px-3 py-1 rounded text-pink-400 shadow-lg">CLICK / TAP</span> the screen
+                </div>
+                <p class="text-red-400 text-2xl mt-6 font-bold text-center">
+                    <span class="text-red-600">DANGER:</span> Precision is key!
+                </p>
+            </div>
+            `, 
+            'START GAME', 
+            startGame
+        );
+    }
+
+    /**
+     * Checks for the gravity flip key (Spacebar) press.
+     * @param {KeyboardEvent} event - The keyboard event object.
+     */
+    function handleKeyDown(event) {
+        if (event.code === 'Space' && isRunning) {
+            event.preventDefault(); // Prevent scrolling
+            applyGravityFlip(); // Call the core logic
+        }
+        // Allows starting/restarting with space from overlay screens
+        if (event.code === 'Space' && !isRunning) {
+            startGame();
+        }
+    }
+
+    // --- Initial Setup ---
+
+    // Set initial canvas size based on responsive width
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+    
+    // Show detailed start screen initially
+    showStartScreen();
+</script>
+
+</body>
+</html>
